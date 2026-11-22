@@ -1,48 +1,71 @@
-import os
 import subprocess
-import glob
+import os
+import json
 
-ASSETS = "assets"
-OUTPUT = "hasil-video.mp4"
+# 6 gambar lo, format webp, nama udah sesuai
+scenes = [
+    "assets/scene1.webp",
+    "assets/scene2.webp",
+    "assets/scene3.webp",
+    "assets/scene4.webp",
+    "assets/scene5.webp",
+    "assets/scene6.webp",
+]
+audio = "assets/narasi.mp3"
+output = "hasil-video.mp4"
 
-def run(cmd):
-    print("JALAN:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+# Cek file ada semua apa nggak
+for f in scenes + [audio]:
+    if not os.path.exists(f):
+        print(f"FILE HILANG: {f}")
+        raise SystemExit(1)
+    print(f"OK ada: {f}")
 
-os.makedirs(ASSETS, exist_ok=True)
-images = sorted(glob.glob(f"{ASSETS}/*.jpg") + glob.glob(f"{ASSETS}/*.png"))
+# Cek durasi audio
+probe = subprocess.run(
+    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+     "-of", "default=noprint_wrappers=1:nokey=1", audio],
+    capture_output=True, text=True
+)
+try:
+    audio_dur = float(probe.stdout.strip())
+except:
+    audio_dur = 60.0
+print(f"Durasi audio: {audio_dur} detik")
 
-if not images:
-    print("Belum ada gambar, bikin 6 gambar dummy buat tes...")
-    colors = ["0x1e3a8a", "0x065f46", "0x7c2d12", "0x581c87", "0x831843", "0x111827"]
-    images = []
-    for i, color in enumerate(colors, start=1):
-        path = f"{ASSETS}/scene{i}.jpg"
-        run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c={color}:s=1080x1920:d=1", "-frames:v", "1", path])
-        images.append(path)
-    images = sorted(images)
+# Durasi tiap gambar = durasi audio / 6
+per_image = audio_dur / len(scenes)
+print(f"Tiap gambar: {per_image} detik")
 
-segments = []
-for i, img in enumerate(images):
-    seg = f"seg_{i}.mp4"
-    run([
-        "ffmpeg", "-y", "-loop", "1", "-i", img,
+# Bikin video per gambar dulu
+temp_videos = []
+for i, img in enumerate(scenes):
+    tmp = f"temp{i}.mp4"
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-loop", "1",
+        "-i", img,
         "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
-        "-t", "10", "-r", "30", "-c:v", "libx264", seg
-    ])
-    segments.append(seg)
+        "-t", str(per_image),
+        "-r", "30",
+        tmp
+    ], check=True)
+    temp_videos.append(tmp)
 
+# Gabungin 6 video jadi 1
 with open("list.txt", "w") as f:
-    for s in segments:
-        f.write(f"file '{s}'\n")
+    for v in temp_videos:
+        f.write(f"file '{v}'\n")
 
-run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "gabung.mp4"])
+subprocess.run([
+    "ffmpeg", "-y",
+    "-f", "concat", "-safe", "0",
+    "-i", "list.txt",
+    "-i", audio,
+    "-c:v", "libx264",
+    "-c:a", "aac",
+    "-shortest",
+    output
+], check=True)
 
-audio = f"{ASSETS}/narasi.mp3"
-if os.path.exists(audio):
-    run(["ffmpeg", "-y", "-i", "gabung.mp4", "-i", audio, "-c:v", "copy", "-c:a", "aac", "-shortest", OUTPUT])
-else:
-    print("Nggak ada narasi.mp3, render tanpa audio dulu")
-    run(["ffmpeg", "-y", "-i", "gabung.mp4", "-c", "copy", OUTPUT])
-
-print(f"SELESAI! File jadi: {OUTPUT}")
+print(f"SELESAI! Video jadi: {output}")
